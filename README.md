@@ -24,7 +24,7 @@ Collapses to one line when space is tight. Collapse it with `[-]` or ctrl+x ctrl
 At the prompt of a Claude Code terminal session:
 
 ```
-/plugin install game-hud --marketplace OWNER/game-hud
+/plugin install game-hud --marketplace zakki-miilo/game-hud
 ```
 
 Answer `y` to add the marketplace, then press Enter for the user scope.

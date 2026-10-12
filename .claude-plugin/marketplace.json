@@ -1,5 +1,5 @@
 {
   "name": "game-hud",
-  "owner": { "name": "zackl" },
+  "owner": { "name": "zakki-miilo" },
   "plugins": [{ "name": "game-hud", "source": "./" }]
 }
