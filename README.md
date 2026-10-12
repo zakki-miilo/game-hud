@@ -17,7 +17,21 @@ A video-game HUD for Claude Code, drawn above the prompt:
 - **★ LV / XP**: one XP per tool call, main agent and subagents.
 - **⚑ PARTY**: subagents currently running, starting or waiting.
 
-Collapses to one line when space is tight. Collapse it with `[-]` or ctrl+x ctrl+a.
+## Raid Frames
+
+`/raid` opens a side pane with one card per agent (it also opens by itself when an agent is summoned):
+
+```
+╭───────────────────────────────────────╮
+│ ♞ scout [running] find auth code      │
+│ ✓ Grep auth                           │
+│ ✓ Read src/auth.ts                    │
+│ ⟳ Read src/login.ts                   │
+│ 3 actions                             │
+╰───────────────────────────────────────╯
+```
+
+The band collapses to one line when space is tight. Collapse it with `[-]` or ctrl+x ctrl+a.
 
 ## Install
 

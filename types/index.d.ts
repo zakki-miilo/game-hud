@@ -10,8 +10,18 @@ export type Stats = {
 
 export type Member = { id: string; type: string; description: string; status: string }
 
+export type Call = { id: string; tool: string; target: string; state: 'run' | 'ok' | 'err' }
+
+export type Frame = { member: Member; calls: Call[]; total: number }
+
 declare module 'claude-code' {
   interface PluginState {
-    'game-hud': { stats: Stats | null; party: Member[]; xp: number; frame: number }
+    'game-hud': {
+      stats: Stats | null
+      party: Member[]
+      xp: number
+      frame: number
+      raid: Frame[]
+    }
   }
 }

@@ -1,12 +1,16 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionUsage } from 'claude-code'
 
-import type { Member, Stats } from '../types'
+import type { Call, Frame, Member, Stats } from '../types'
 
 const stats = atom({ plugin: 'game-hud', key: 'stats' } as const, null)
 const party = atom({ plugin: 'game-hud', key: 'party' } as const, [])
 const xp = atom({ plugin: 'game-hud', key: 'xp' } as const, 0)
 const frame = atom({ plugin: 'game-hud', key: 'frame' } as const, 0)
+const raid = atom({ plugin: 'game-hud', key: 'raid' } as const, [])
+
+const RAID = 'raid-frames'
+const RAID_TITLE = '⚔ Raid Frames'
 
 const ACTIVE = ['pending', 'running', 'waiting']
 const LIMIT_NAMES: Record<string, string> = { five_hour: '5H', seven_day: '7D', spend_limit: '$$' }
@@ -48,6 +52,37 @@ const countdown = (iso: string | undefined, now: number) => {
 let lastParty = ''
 let warnedHp = false
 const warnedLimits = new Set<string>()
+let lastRoster = ''
+
+// What a call is aimed at, in a few words: the file, the pattern, the command.
+export const targetOf = (args: Record<string, unknown>) => {
+  const pick = ['file_path', 'pattern', 'command', 'url', 'query', 'description', 'path']
+  for (const k of pick) {
+    const v = args[k]
+    if (typeof v === 'string' && v) {
+      const short = k === 'file_path' || k === 'path' ? v.split(/[\\/]/).slice(-2).join('/') : v
+      return short.length > 48 ? `${short.slice(0, 47)}…` : short
+    }
+  }
+  return ''
+}
+
+// Newest six agents, the running ones first; each keeps its last five calls.
+export const mergeRoster = (frames: Frame[], members: Member[]): Frame[] => {
+  const byId = new Map(frames.map(f => [f.member.id, f]))
+  const merged = members.map(m => ({ ...(byId.get(m.id) ?? { calls: [], total: 0 }), member: m }))
+  const live = merged.filter(f => ACTIVE.includes(f.member.status))
+  const done = merged.filter(f => !ACTIVE.includes(f.member.status))
+  return [...live, ...done.slice(-Math.max(0, 6 - live.length))].slice(0, 6)
+}
+
+export const recordCall = (frames: Frame[], agentId: string, call: Call): Frame[] =>
+  frames.map(f => {
+    if (f.member.id !== agentId) return f
+    const has = f.calls.some(c => c.id === call.id)
+    const calls = has ? f.calls.map(c => (c.id === call.id ? call : c)) : [...f.calls, call].slice(-5)
+    return { ...f, calls, total: has ? f.total : f.total + 1 }
+  })
 
 async function refreshParty($: EngineInterface) {
   const all = await $.agent.list()
@@ -61,6 +96,12 @@ async function refreshParty($: EngineInterface) {
   }
   if (active.length > 0) {
     await update($, frame, f => (f + 1) % 2)
+  }
+  const roster: Member[] = all.map(a => ({ id: a.id, type: a.type, description: a.description, status: a.status }))
+  const rosterKey = JSON.stringify(roster)
+  if (rosterKey !== lastRoster) {
+    lastRoster = rosterKey
+    await update($, raid, frames => mergeRoster(frames, roster))
   }
 }
 
@@ -90,6 +131,7 @@ export const register: Register = on => {
     await update($, stats, () => toStats(usage))
     await refreshParty($)
     $.clock.every(1000, () => void refreshParty($))
+    await $.command.register({ name: 'raid', description: 'Open the Raid Frames pane: live tool calls of every agent' })
 
     return ran
   })
@@ -105,14 +147,78 @@ export const register: Register = on => {
   on('agent.spawn', async ($, e, next) => {
     const spawned = await next(e)
     await refreshParty($)
+    void $.ui.open({ id: RAID, title: RAID_TITLE })
 
     return spawned
   })
 
   on('tool.call', async ($, e, next) => {
     await update($, xp, n => n + 1)
+    const agentId = e.agentId
+    if (!agentId) {
+      return next(e)
+    }
 
-    return next(e)
+    const call: Call = { id: e.tool_use_id, tool: e.tool, target: targetOf(e as Record<string, unknown>), state: 'run' }
+    await update($, raid, frames => recordCall(frames, agentId, call))
+    const ran = await next(e)
+    const failed = ran.isError === true || ran.deny !== undefined
+    await update($, raid, frames => recordCall(frames, agentId, { ...call, state: failed ? 'err' : 'ok' }))
+
+    return ran
+  })
+
+  on('command.run', { command: 'raid' }, async $ => {
+    await $.ui.open({ id: RAID, title: RAID_TITLE })
+
+    return { text: 'Raid Frames opened.' }
+  })
+
+  on('ui.render', { component: 'Pane', requestId: RAID }, async ($, e) => {
+    const { Box, Text } = $.ui.resolve(e)
+    const frames = await read($, raid)
+    const f = await read($, frame)
+
+    if (frames.length === 0) {
+      return (
+        <Box flexDirection="column">
+          <Text dimColor>No party yet. Agents appear here when they're summoned.</Text>
+        </Box>
+      )
+    }
+
+    return (
+      <Box flexDirection="column">
+        {frames.map((fr, i) => {
+          const live = ACTIVE.includes(fr.member.status)
+          const color = live ? 'claude' : fr.member.status === 'completed' ? 'success' : 'error'
+          return (
+            <Box key={fr.member.id} flexDirection="column" borderStyle="round" borderColor={color} borderDimColor={!live} paddingX={1}>
+              <Text wrap="truncate">
+                <Text color={color} bold>
+                  {SPRITES[i % SPRITES.length]?.[live ? (f + i) % 2 : 0] ?? '☻'} {fr.member.type}
+                </Text>
+                <Text dimColor>
+                  {' '}
+                  [{fr.member.status}] {fr.member.description}
+                </Text>
+              </Text>
+              {fr.calls.length === 0 && <Text dimColor>  …gearing up</Text>}
+              {fr.calls.map(c => (
+                <Text wrap="truncate" dimColor={!live}>
+                  {c.state === 'run' ? <Text color="warning">⟳</Text> : c.state === 'ok' ? <Text color="success">✓</Text> : <Text color="error">✗</Text>}{' '}
+                  <Text bold>{c.tool}</Text> <Text dimColor>{c.target}</Text>
+                </Text>
+              ))}
+              <Text dimColor>
+                {fr.total} action{fr.total === 1 ? '' : 's'}
+                {fr.total > fr.calls.length ? ` (last ${fr.calls.length} shown)` : ''}
+              </Text>
+            </Box>
+          )
+        })}
+      </Box>
+    )
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
