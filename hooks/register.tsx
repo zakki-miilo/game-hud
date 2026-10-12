@@ -107,10 +107,10 @@ async function refreshParty($: EngineInterface) {
 
 function alarms($: EngineInterface, s: Stats) {
   if (s.ctxPct !== undefined) {
-    if (s.ctxPct >= 80 && !warnedHp) {
+    if (s.ctxPct >= 75 && !warnedHp) {
       warnedHp = true
       $.ui.toast(`☠ LOW HP! Context ${s.ctxPct}% full. Cast /compact to heal.`, { timeoutMs: 8000 })
-    } else if (s.ctxPct < 70) {
+    } else if (s.ctxPct < 65) {
       warnedHp = false
     }
   }
