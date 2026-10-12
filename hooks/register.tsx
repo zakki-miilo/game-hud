@@ -9,6 +9,7 @@ const xp = atom({ plugin: 'game-hud', key: 'xp' } as const, 0)
 const frame = atom({ plugin: 'game-hud', key: 'frame' } as const, 0)
 const raid = atom({ plugin: 'game-hud', key: 'raid' } as const, [])
 const errStreak = atom({ plugin: 'game-hud', key: 'errStreak' } as const, 0)
+const errAt = atom({ plugin: 'game-hud', key: 'errAt' } as const, 0)
 const slowUntil = atom({ plugin: 'game-hud', key: 'slowUntil' } as const, 0)
 const costSamples = atom({ plugin: 'game-hud', key: 'costSamples' } as const, [])
 
@@ -19,6 +20,7 @@ const ACTIVE = ['pending', 'running', 'waiting']
 const LIMIT_NAMES: Record<string, string> = { five_hour: '5H', seven_day: '7D', spend_limit: '$$' }
 const WINDOW_MS: Record<string, number> = { five_hour: 5 * 3600_000, seven_day: 7 * 86_400_000 }
 const POISON_STREAK = 3
+const POISON_SHOW_MS = 5 * 60_000
 const SLOW_CALL_MS = 20_000
 const SLOW_SHOW_MS = 10_000
 const BURN_USD_PER_MIN = 0.5
@@ -73,11 +75,26 @@ export const paceOf = (l: Limit, now: number): { kind: 'fast' | 'slow' | 'even';
   return { kind: delta > 5 ? 'fast' : delta < -5 ? 'slow' : 'even', elapsed }
 }
 
+export type Outcome = 'ok' | 'error' | 'refused' | 'aborted'
+
+// How a main-agent tool call ended. A hook's refusal or an interrupt is not a broken tool;
+// a call that finished fine stays ok even if the signal aborted as it landed.
+// (A permission "No" reaches us as a plain isError result, so it still counts as an error.)
+export const outcomeOf = (ran: { isError?: boolean; deny?: unknown } | undefined, aborted: boolean): Outcome =>
+  ran === undefined || ran.isError === true ? (aborted ? 'aborted' : 'error') : ran.deny !== undefined ? 'refused' : 'ok'
+
+// Only errors build the streak; a success clears it; refusals and interrupts leave it be.
+// A streak that went quiet for POISON_SHOW_MS starts over, so an old one can't re-arm on a single error.
+export const nextStreak = (streak: number, outcome: Outcome, sinceError = 0) => {
+  const base = sinceError > POISON_SHOW_MS ? 0 : streak
+  return outcome === 'error' ? base + 1 : outcome === 'ok' ? 0 : base
+}
+
 export type Effect = { icon: string; label: string; color: string }
 
-export const effectsOf = (o: { errStreak: number; slowUntil: number; burning: boolean; limits: Limit[]; now: number }): Effect[] => {
+export const effectsOf = (o: { errStreak: number; errAt: number; slowUntil: number; burning: boolean; limits: Limit[]; now: number }): Effect[] => {
   const out: Effect[] = []
-  if (o.errStreak >= POISON_STREAK) out.push({ icon: '☠', label: 'POISONED', color: 'error' })
+  if (o.errStreak >= POISON_STREAK && o.now - o.errAt <= POISON_SHOW_MS) out.push({ icon: '☠', label: 'POISONED', color: 'error' })
   if (o.slowUntil > o.now) out.push({ icon: '◔', label: 'SLOWED', color: 'warning' })
   if (o.burning) out.push({ icon: '✹', label: 'BURNING', color: 'warning' })
   if (o.limits.some(l => l.pct >= 90 && !(l.resetsAt && Date.parse(l.resetsAt) <= o.now))) out.push({ icon: '❄', label: 'FROZEN', color: 'suggestion' })
@@ -182,6 +199,7 @@ export const register: Register = on => {
     const usage = await $.session.usage()
     await update($, stats, () => toStats(usage))
     await update($, errStreak, () => 0)
+    await update($, errAt, () => 0)
     await update($, slowUntil, () => 0)
     await update($, costSamples, () => [])
     await refreshParty($)
@@ -224,22 +242,28 @@ export const register: Register = on => {
     try {
       ran = await next(e)
     } finally {
-      // A call that threw or was aborted still counts as a failure.
-      const errored = ran === undefined || ran.isError === true
-      const failed = errored || ran?.deny !== undefined
-      if (agentId) {
-        await update($, raid, frames => recordCall(frames, agentId, { ...call, state: failed ? 'err' : 'ok' }))
-      } else {
-        // The main agent's own calls drive its status effects; a refusal is not a broken tool.
-        await update($, errStreak, n => (errored ? n + 1 : ran?.deny !== undefined ? n : 0))
-        const t = await $.clock.now()
-        if (t - started >= SLOW_CALL_MS && !NO_SLOW_TOOLS.includes(e.tool)) {
-          await update($, slowUntil, () => t + SLOW_SHOW_MS)
+      // Bookkeeping must never mask the tool's own result or error.
+      try {
+        const outcome = outcomeOf(ran, next.signal.aborted)
+        if (agentId) {
+          await update($, raid, frames => recordCall(frames, agentId, { ...call, state: outcome === 'ok' ? 'ok' : 'err' }))
+        } else {
+          const t = await $.clock.now()
+          const since = t - (await read($, errAt))
+          await update($, errStreak, n => nextStreak(n, outcome, since))
+          if (outcome === 'error') {
+            await update($, errAt, () => t)
+          }
+          if (outcome !== 'aborted' && t - started >= SLOW_CALL_MS && !NO_SLOW_TOOLS.includes(e.tool)) {
+            await update($, slowUntil, () => t + SLOW_SHOW_MS)
+          }
+          const usd = (await $.session.usage()).cost?.usd
+          if (usd !== undefined) {
+            await update($, costSamples, c => addSample(c, t, usd))
+          }
         }
-        const usd = (await $.session.usage()).cost?.usd
-        if (usd !== undefined) {
-          await update($, costSamples, c => addSample(c, t, usd))
-        }
+      } catch (err) {
+        $.ui.log(`game-hud: tool bookkeeping failed: ${String(err)}`, { to: 'debug' })
       }
     }
 
@@ -312,8 +336,9 @@ export const register: Register = on => {
     const now = await $.clock.now()
     const streak = await read($, errStreak)
     const slow = await read($, slowUntil)
+    const errTime = await read($, errAt)
     const samples = await read($, costSamples)
-    const effects = effectsOf({ errStreak: streak, slowUntil: slow, burning: isBurning(samples, now), limits: s?.limits ?? [], now })
+    const effects = effectsOf({ errStreak: streak, errAt: errTime, slowUntil: slow, burning: isBurning(samples, now), limits: s?.limits ?? [], now })
 
     const level = levelOf(points)
     const lo = floorOf(level)

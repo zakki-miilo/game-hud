@@ -25,6 +25,7 @@ declare module 'claude-code' {
       frame: number
       raid: Frame[]
       errStreak: number
+      errAt: number
       slowUntil: number
       costSamples: CostSample[]
     }

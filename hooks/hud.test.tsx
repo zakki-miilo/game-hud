@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { bar, burnRate, effectsOf, isBurning, levelOf, mergeRoster, paceOf, recordCall, targetOf } from './register'
+import { bar, burnRate, effectsOf, isBurning, levelOf, mergeRoster, nextStreak, outcomeOf, paceOf, recordCall, targetOf } from './register'
 
 const band = (maxRows: number) => ({
   component: 'AbovePrompt' as const,
@@ -94,7 +94,7 @@ test('pace compares stamina used with the clock', async () => {
 })
 
 test('status effects follow errors, slow calls, spend and stamina', async () => {
-  const base = { errStreak: 0, slowUntil: 0, burning: false, limits: [], now: 1000 }
+  const base = { errStreak: 0, errAt: 1000, slowUntil: 0, burning: false, limits: [], now: 1000 }
   expect(effectsOf(base)).toEqual([])
   const labels = (o: Partial<typeof base>) => effectsOf({ ...base, ...o }).map(e => e.label)
   expect(labels({ errStreak: 2 })).toEqual([])
@@ -123,6 +123,33 @@ test('a window that has reset is stale: no pace marker, no frozen', async () => 
   const now = Date.parse('2026-10-12T00:00:00Z')
   const past = new Date(now - 1000).toISOString()
   expect(paceOf({ kind: 'five_hour', pct: 92, resetsAt: past }, now)).toBeUndefined()
-  const base = { errStreak: 0, slowUntil: 0, burning: false, now }
+  const base = { errStreak: 0, errAt: 0, slowUntil: 0, burning: false, now }
   expect(effectsOf({ ...base, limits: [{ kind: 'five_hour', pct: 92, resetsAt: past }] })).toEqual([])
+})
+
+test('tool outcomes: refusals and interrupts do not poison', async () => {
+  expect(outcomeOf({}, false)).toBe('ok')
+  expect(outcomeOf({ isError: true }, false)).toBe('error')
+  expect(outcomeOf({ deny: 'no' }, false)).toBe('refused')
+  expect(outcomeOf(undefined, false)).toBe('error') // next threw
+  expect(outcomeOf(undefined, true)).toBe('aborted')
+  expect(outcomeOf({ isError: true }, true)).toBe('aborted')
+  expect(outcomeOf({}, true)).toBe('ok') // finished fine as the signal aborted
+
+  let n = 0
+  for (const o of ['error', 'refused', 'aborted', 'error', 'aborted', 'error'] as const) n = nextStreak(n, o)
+  expect(n).toBe(3)
+  expect(nextStreak(n, 'ok')).toBe(0)
+})
+
+test('poison wears off once the session goes quiet', async () => {
+  const base = { errStreak: 3, errAt: 0, slowUntil: 0, burning: false, limits: [] }
+  expect(effectsOf({ ...base, now: 60_000 }).map(e => e.label)).toEqual(['POISONED'])
+  expect(effectsOf({ ...base, now: 10 * 60_000 })).toEqual([])
+})
+
+test('a quiet streak starts over instead of re-arming on one error', async () => {
+  expect(nextStreak(3, 'error', 10 * 60_000)).toBe(1)
+  expect(nextStreak(3, 'error', 1000)).toBe(4)
+  expect(nextStreak(3, 'refused', 10 * 60_000)).toBe(0)
 })
