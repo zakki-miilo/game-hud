@@ -17,6 +17,7 @@ A video-game HUD for Claude Code, drawn above the prompt:
 - **◎**: session cost so far.
 - **★ LV / XP**: one XP per tool call, main agent and subagents.
 - **⚑ PARTY**: subagents currently running, starting or waiting. With none, the party rests at a flickering campfire (♨).
+- **Colors**: the HUD and Raid Frames wear the opposite of your system appearance, dark when macOS is in light mode and light when it is in dark mode, rechecked every 10 seconds. Off macOS it goes by Claude Code's `/config` theme instead.
 
 ## Raid Frames
 

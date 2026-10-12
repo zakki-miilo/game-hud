@@ -16,6 +16,8 @@ export type CostSample = { t: number; usd: number }
 
 export type Frame = { member: Member; calls: Call[]; total: number }
 
+export type Look = 'dark' | 'light'
+
 declare module 'claude-code' {
   interface PluginState {
     'game-hud': {
@@ -28,6 +30,7 @@ declare module 'claude-code' {
       errAt: number
       slowUntil: number
       costSamples: CostSample[]
+      look: Look
     }
   }
 }

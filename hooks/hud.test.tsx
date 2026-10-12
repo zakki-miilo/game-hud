@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { bar, burnRate, effectsOf, isBurning, levelOf, mergeRoster, nextStreak, outcomeOf, paceOf, recordCall, targetOf } from './register'
+import { PALETTES, bar, burnRate, effectsOf, isBurning, levelOf, lookFor, mergeRoster, nextStreak, outcomeOf, paceOf, recordCall, targetOf } from './register'
 
 const band = (maxRows: number) => ({
   component: 'AbovePrompt' as const,
@@ -41,6 +41,19 @@ test('HUD shows HP, stamina, gold, level and an empty party', async ($, on) => {
     expect(await ui.find({ type: 'Text', text: /resting at camp/ })).toBeDefined()
     await ui.unmount()
   }
+})
+
+test('the HUD wears the opposite of the system appearance', async () => {
+  expect(lookFor('light')).toBe('dark')
+  expect(lookFor('dark')).toBe('light')
+})
+
+test('the HUD paints its own background and text', async ($, on) => {
+  world(on)
+  const ui = await $.ui.mount({ plugin: 'game-hud', surface: 'terminal', ...band(10) })
+  const panel = await ui.find({ type: 'Box' })
+  expect(Object.values(PALETTES).map(p => p.bg)).toContain(panel?.props.backgroundColor)
+  await ui.unmount()
 })
 
 test('cramped band falls back to one line', async ($, on) => {

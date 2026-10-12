@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionUsage } from 'claude-code'
 
-import type { Call, CostSample, Frame, Limit, Member, Stats } from '../types'
+import type { Call, CostSample, Frame, Limit, Look, Member, Stats } from '../types'
 
 const stats = atom({ plugin: 'game-hud', key: 'stats' } as const, null)
 const party = atom({ plugin: 'game-hud', key: 'party' } as const, [])
@@ -12,6 +12,7 @@ const errStreak = atom({ plugin: 'game-hud', key: 'errStreak' } as const, 0)
 const errAt = atom({ plugin: 'game-hud', key: 'errAt' } as const, 0)
 const slowUntil = atom({ plugin: 'game-hud', key: 'slowUntil' } as const, 0)
 const costSamples = atom({ plugin: 'game-hud', key: 'costSamples' } as const, [])
+const look = atom({ plugin: 'game-hud', key: 'look' } as const, 'dark')
 
 const RAID = 'raid-frames'
 const RAID_TITLE = '⚔ Raid Frames'
@@ -26,6 +27,7 @@ const SLOW_SHOW_MS = 10_000
 const BURN_USD_PER_MIN = 0.5
 const BURN_WINDOW_MS = 3 * 60_000
 const BURN_STALE_MS = 60_000
+const LOOK_CHECK_MS = 10_000
 // Tools that wait on the user or on other agents, not on themselves.
 const NO_SLOW_TOOLS = ['Agent', 'Task', 'Workflow', 'AskUserQuestion', 'ExitPlanMode', 'EnterPlanMode']
 const SPRITES = [
@@ -50,6 +52,40 @@ const floorOf = (level: number) => 10 * (level - 1) ** 2
 export const bar = (pct: number, width: number) => {
   const filled = Math.round((Math.max(0, Math.min(100, pct)) / 100) * width)
   return '█'.repeat(filled) + '░'.repeat(width - filled)
+}
+
+// Explicit colors instead of theme keys, so the HUD can wear the opposite of the screen around it.
+export const PALETTES = {
+  dark: { bg: '#1e1f29', text: '#e6e6e6', dim: '#8a8fa3', claude: '#e08a6a', success: '#7bc96f', warning: '#e5c07b', error: '#ef6b73', suggestion: '#8fa8ff' },
+  light: { bg: '#f4f1ea', text: '#1f1f24', dim: '#6b6f7b', claude: '#b5532f', success: '#2e7d32', warning: '#9a6200', error: '#c62828', suggestion: '#3f51b5' },
+} as const
+
+export type Palette = (typeof PALETTES)[Look]
+
+// The HUD wears the opposite of the system appearance: dark on a light system, light on a dark one.
+export const lookFor = (system: Look): Look => (system === 'dark' ? 'light' : 'dark')
+
+// macOS appearance; elsewhere, Claude Code's own theme setting.
+async function systemAppearance($: EngineInterface): Promise<Look> {
+  try {
+    // Exits 1 with nothing on stdout when the system is in light mode.
+    const { stdout } = await $.process.run(['defaults', 'read', '-g', 'AppleInterfaceStyle'], { timeoutMs: 2000 })
+    return stdout.trim() === 'Dark' ? 'dark' : 'light'
+  } catch {
+    const theme = (await $.config.list()).find(row => row.key === 'theme')?.value
+    return typeof theme === 'string' && theme.startsWith('light') ? 'light' : 'dark'
+  }
+}
+
+async function refreshLook($: EngineInterface) {
+  try {
+    const next = lookFor(await systemAppearance($))
+    if (next !== (await read($, look))) {
+      await update($, look, () => next)
+    }
+  } catch (err) {
+    $.ui.log(`game-hud: appearance check failed: ${String(err)}`, { to: 'debug' })
+  }
 }
 
 const tone = (remaining: number) => (remaining > 50 ? 'success' : remaining > 20 ? 'warning' : 'error')
@@ -204,6 +240,8 @@ export const register: Register = on => {
     await update($, costSamples, () => [])
     await refreshParty($)
     $.clock.every(1000, () => void refreshParty($))
+    await refreshLook($)
+    $.clock.every(LOOK_CHECK_MS, () => void refreshLook($))
     await $.command.register({ name: 'raid', description: 'Open the Raid Frames pane: live tool calls of every agent' })
 
     return ran
@@ -278,41 +316,43 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: RAID }, async ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
+    const p = PALETTES[await read($, look)]
+    const paint = (key: string) => p[key as keyof Palette] ?? key
     const frames = await read($, raid)
     const f = await read($, frame)
 
     if (frames.length === 0) {
       return (
-        <Box flexDirection="column">
-          <Text dimColor>No party yet. Agents appear here when they're summoned.</Text>
+        <Box flexDirection="column" backgroundColor={p.bg}>
+          <Text color={p.dim}>No party yet. Agents appear here when they're summoned.</Text>
         </Box>
       )
     }
 
     return (
-      <Box flexDirection="column">
+      <Box flexDirection="column" backgroundColor={p.bg}>
         {frames.map((fr, i) => {
           const live = ACTIVE.includes(fr.member.status)
           const color = live ? 'claude' : fr.member.status === 'completed' ? 'success' : 'error'
           return (
-            <Box key={fr.member.id} flexDirection="column" borderStyle="round" borderColor={color} borderDimColor={!live} paddingX={1}>
-              <Text wrap="truncate">
-                <Text color={color} bold>
+            <Box key={fr.member.id} flexDirection="column" borderStyle="round" borderColor={paint(color)} borderDimColor={!live} backgroundColor={p.bg} paddingX={1}>
+              <Text wrap="truncate" color={p.text}>
+                <Text color={paint(color)} bold>
                   {SPRITES[i % SPRITES.length]?.[live ? (f + i) % 2 : 0] ?? '☻'} {fr.member.type}
                 </Text>
-                <Text dimColor>
+                <Text color={p.dim}>
                   {' '}
                   [{fr.member.status}] {fr.member.description}
                 </Text>
               </Text>
-              {fr.calls.length === 0 && <Text dimColor>  …gearing up</Text>}
+              {fr.calls.length === 0 && <Text color={p.dim}>  …gearing up</Text>}
               {fr.calls.map(c => (
-                <Text wrap="truncate" dimColor={!live}>
-                  {c.state === 'run' ? <Text color="warning">⟳</Text> : c.state === 'ok' ? <Text color="success">✓</Text> : <Text color="error">✗</Text>}{' '}
-                  <Text bold>{c.tool}</Text> <Text dimColor>{c.target}</Text>
+                <Text wrap="truncate" color={live ? p.text : p.dim}>
+                  {c.state === 'run' ? <Text color={p.warning}>⟳</Text> : c.state === 'ok' ? <Text color={p.success}>✓</Text> : <Text color={p.error}>✗</Text>}{' '}
+                  <Text bold>{c.tool}</Text> <Text color={p.dim}>{c.target}</Text>
                 </Text>
               ))}
-              <Text dimColor>
+              <Text color={p.dim}>
                 {fr.total} action{fr.total === 1 ? '' : 's'}
                 {fr.total > fr.calls.length ? ` (last ${fr.calls.length} shown)` : ''}
               </Text>
@@ -329,6 +369,8 @@ export const register: Register = on => {
     }
 
     const { Box, Text } = $.ui.resolve(e)
+    const p = PALETTES[await read($, look)]
+    const paint = (key: string) => p[key as keyof Palette] ?? key
     const s = await read($, stats)
     const members = await read($, party)
     const points = await read($, xp)
@@ -351,11 +393,11 @@ export const register: Register = on => {
 
     const hpText =
       hp === undefined ? (
-        <Text dimColor>{'?'.repeat(w)} awaiting first battle</Text>
+        <Text color={p.dim}>{'?'.repeat(w)} awaiting first battle</Text>
       ) : (
         <Text>
-          <Text color={tone(hp)}>{bar(hp, w)}</Text> {hp}%{' '}
-          <Text dimColor>
+          <Text color={paint(tone(hp))}>{bar(hp, w)}</Text> {hp}%{' '}
+          <Text color={p.dim}>
             {kilo(s!.ctxTokens ?? 0)}/{kilo(s!.ctxWindow)} used
           </Text>
         </Text>
@@ -364,109 +406,109 @@ export const register: Register = on => {
     const partyText =
       members.length === 0 ? (
         <Text>
-          <Text dimColor>resting at camp </Text>
+          <Text color={p.dim}>resting at camp </Text>
           <Text color={f === 0 ? 'warning' : 'error'}>♨</Text>
         </Text>
       ) : (
         <Text>
           {members.slice(0, 4).map((m, i) => (
             <Text>
-              <Text color="claude" bold>
+              <Text color={p.claude} bold>
                 {SPRITES[i % SPRITES.length]?.[(f + i) % 2] ?? '☻'}
               </Text>{' '}
               <Text bold>{m.type}</Text>
-              <Text dimColor>
+              <Text color={p.dim}>
                 {' '}
                 {m.description}
                 {'   '}
               </Text>
             </Text>
           ))}
-          {members.length > 4 && <Text dimColor>+{members.length - 4} more</Text>}
+          {members.length > 4 && <Text color={p.dim}>+{members.length - 4} more</Text>}
         </Text>
       )
 
     // Too little room for the full panel: one line.
     if (e.props.maxRows < 6) {
       return (
-        <Text wrap="truncate">
-          <Text color="claude" bold>
+        <Text wrap="truncate" color={p.text} backgroundColor={p.bg}>
+          <Text color={p.claude} bold>
             LV{level}
           </Text>{' '}
-          <Text color="error">♥</Text>
+          <Text color={p.error}>♥</Text>
           {hp ?? '?'}%{' '}
           {s?.limits.map(l => (
             <Text>
-              <Text color="warning">◆</Text>
+              <Text color={p.warning}>◆</Text>
               {LIMIT_NAMES[l.kind] ?? l.kind} {100 - l.pct}%{' '}
             </Text>
           ))}
-          <Text color="warning">{gold}</Text> <Text color="claude">⚔</Text>
+          <Text color={p.warning}>{gold}</Text> <Text color={p.claude}>⚔</Text>
           {members.length} active
         </Text>
       )
     }
 
     return (
-      <Box flexDirection="column" borderStyle="round" borderColor="claude" paddingX={1}>
+      <Box flexDirection="column" borderStyle="round" borderColor={p.claude} backgroundColor={p.bg} paddingX={1}>
         <Box justifyContent="space-between">
-          <Text wrap="truncate">
-            <Text color="claude" bold>
+          <Text wrap="truncate" color={p.text}>
+            <Text color={p.claude} bold>
               ⚔ CLAUDE QUEST
             </Text>
             {'  '}
             <Text bold>★ LV {level}</Text>{' '}
-            <Text color="suggestion">{bar(((points - lo) / (hi - lo)) * 100, w)}</Text>{' '}
-            <Text dimColor>
+            <Text color={p.suggestion}>{bar(((points - lo) / (hi - lo)) * 100, w)}</Text>{' '}
+            <Text color={p.dim}>
               {points - lo}/{hi - lo} XP
             </Text>
           </Text>
-          <Text color="warning" bold>
+          <Text color={p.warning} bold>
             ◎ {gold}
           </Text>
         </Box>
-        <Text wrap="truncate">
-          <Text color="error" bold>
+        <Text wrap="truncate" color={p.text}>
+          <Text color={p.error} bold>
             ♥ HP{'  '}
           </Text>
           {hpText}
           {effects.map(x => (
-            <Text color={x.color}>
+            <Text color={paint(x.color)}>
               {'  '}
               {x.icon}
               {cols >= 100 ? ` ${x.label}` : ''}
             </Text>
           ))}
         </Text>
-        <Text wrap="truncate">
-          <Text color="warning" bold>
+        <Text wrap="truncate" color={p.text}>
+          <Text color={p.warning} bold>
             ◆ SP{'  '}
           </Text>
           {!s || s.limits.length === 0 ? (
-            <Text dimColor>no rate-limit readings yet</Text>
+            <Text color={p.dim}>no rate-limit readings yet</Text>
           ) : (
             s.limits.map(l => {
               const pace = paceOf(l, now)
               return (
                 <Text>
-                  <Text dimColor>{LIMIT_NAMES[l.kind] ?? l.kind} </Text>
-                  <Text color={tone(100 - l.pct)}>{bar(100 - l.pct, Math.max(4, Math.floor(w / 2)))}</Text>{' '}
+                  <Text color={p.dim}>{LIMIT_NAMES[l.kind] ?? l.kind} </Text>
+                  <Text color={paint(tone(100 - l.pct))}>{bar(100 - l.pct, Math.max(4, Math.floor(w / 2)))}</Text>{' '}
                   {100 - l.pct}%
                   {pace && (
-                    <Text color={pace.kind === 'fast' ? 'error' : pace.kind === 'slow' ? 'success' : undefined} dimColor={pace.kind === 'even'}>
+                    <Text color={pace.kind === 'fast' ? p.error : pace.kind === 'slow' ? p.success : p.dim}>
                       {' '}
                       {pace.kind === 'fast' ? '▲' : pace.kind === 'slow' ? '▼' : '≈'}
                     </Text>
                   )}
-                  <Text dimColor> ↻ {countdown(l.resetsAt, now)}</Text>
+                  <Text color={p.dim}> ↻ {countdown(l.resetsAt, now)}</Text>
                   {'   '}
                 </Text>
               )
             })
           )}
         </Text>
-        <Text wrap="truncate">
-          <Text color="claude" bold>
+        <Text wrap="truncate" color={p.text}>
+          <Text color={p.claude} bold>
             ⚑ PARTY [{members.length}]{' '}
           </Text>
           {partyText}
