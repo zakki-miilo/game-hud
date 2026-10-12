@@ -333,7 +333,7 @@ export const register: Register = on => {
                 <Text dimColor>{LIMIT_NAMES[l.kind] ?? l.kind} </Text>
                 <Text color={tone(100 - l.pct)}>{bar(100 - l.pct, Math.max(4, Math.floor(w / 2)))}</Text>{' '}
                 {100 - l.pct}%
-                <Text dimColor> ↻{countdown(l.resetsAt, now)}</Text>
+                <Text dimColor> ↻ {countdown(l.resetsAt, now)}</Text>
                 {'   '}
               </Text>
             ))

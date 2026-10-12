@@ -6,12 +6,12 @@ A video-game HUD for Claude Code, drawn above the prompt:
 ╭──────────────────────────────────────────────────────────────╮
 │ ⚔ CLAUDE QUEST  ★ LV 3 ▓▓▓▓░░░░░░  18/50 XP        ◎ $1.42   │
 │ ♥ HP  ████████░░░░ 68%  64k/200k used                        │
-│ ◆ SP  5H ████░░ 77% ↻2h14m   7D ███░░░ 59% ↻3d4h            │
+│ ◆ SP  5H ████░░ 77% ↻ 2h14m   7D ███░░░ 59% ↻ 3d4h           │
 │ ⚑ PARTY [2] ♞ Explore find auth code   ♜ critic review diff │
 ╰──────────────────────────────────────────────────────────────╯
 ```
 
-- **♥ HP**: free context window. Toast at 80% used.
+- **♥ HP**: free context window. Toast at 75% used.
 - **◆ SP**: rate-limit windows left (subscription plans), with reset countdowns. Toast at 90% used.
 - **◎**: session cost so far.
 - **★ LV / XP**: one XP per tool call, main agent and subagents.
