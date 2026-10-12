@@ -12,6 +12,8 @@ export type Member = { id: string; type: string; description: string; status: st
 
 export type Call = { id: string; tool: string; target: string; state: 'run' | 'ok' | 'err' }
 
+export type CostSample = { t: number; usd: number }
+
 export type Frame = { member: Member; calls: Call[]; total: number }
 
 declare module 'claude-code' {
@@ -22,6 +24,9 @@ declare module 'claude-code' {
       xp: number
       frame: number
       raid: Frame[]
+      errStreak: number
+      slowUntil: number
+      costSamples: CostSample[]
     }
   }
 }

@@ -1,19 +1,31 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionUsage } from 'claude-code'
 
-import type { Call, Frame, Member, Stats } from '../types'
+import type { Call, CostSample, Frame, Limit, Member, Stats } from '../types'
 
 const stats = atom({ plugin: 'game-hud', key: 'stats' } as const, null)
 const party = atom({ plugin: 'game-hud', key: 'party' } as const, [])
 const xp = atom({ plugin: 'game-hud', key: 'xp' } as const, 0)
 const frame = atom({ plugin: 'game-hud', key: 'frame' } as const, 0)
 const raid = atom({ plugin: 'game-hud', key: 'raid' } as const, [])
+const errStreak = atom({ plugin: 'game-hud', key: 'errStreak' } as const, 0)
+const slowUntil = atom({ plugin: 'game-hud', key: 'slowUntil' } as const, 0)
+const costSamples = atom({ plugin: 'game-hud', key: 'costSamples' } as const, [])
 
 const RAID = 'raid-frames'
 const RAID_TITLE = '⚔ Raid Frames'
 
 const ACTIVE = ['pending', 'running', 'waiting']
 const LIMIT_NAMES: Record<string, string> = { five_hour: '5H', seven_day: '7D', spend_limit: '$$' }
+const WINDOW_MS: Record<string, number> = { five_hour: 5 * 3600_000, seven_day: 7 * 86_400_000 }
+const POISON_STREAK = 3
+const SLOW_CALL_MS = 20_000
+const SLOW_SHOW_MS = 10_000
+const BURN_USD_PER_MIN = 0.5
+const BURN_WINDOW_MS = 3 * 60_000
+const BURN_STALE_MS = 60_000
+// Tools that wait on the user or on other agents, not on themselves.
+const NO_SLOW_TOOLS = ['Agent', 'Task', 'Workflow', 'AskUserQuestion', 'ExitPlanMode', 'EnterPlanMode']
 const SPRITES = [
   ['☻', '☺'],
   ['♞', '♘'],
@@ -48,6 +60,48 @@ const countdown = (iso: string | undefined, now: number) => {
   if (mins >= 1440) return `${Math.floor(mins / 1440)}d${Math.floor((mins % 1440) / 60)}h`
   return mins >= 60 ? `${Math.floor(mins / 60)}h${mins % 60}m` : `${mins}m`
 }
+
+// Used vs. time elapsed in a rate-limit window: fast = burning stamina quicker than the clock refills it.
+export const paceOf = (l: Limit, now: number): { kind: 'fast' | 'slow' | 'even'; elapsed: number } | undefined => {
+  const span = WINDOW_MS[l.kind]
+  if (!span || !l.resetsAt) return undefined
+  const left = Date.parse(l.resetsAt) - now
+  // A window that has already reset means the reading is stale.
+  if (Number.isNaN(left) || left <= 0) return undefined
+  const elapsed = Math.max(0, Math.min(100, 100 - (left / span) * 100))
+  const delta = l.pct - elapsed
+  return { kind: delta > 5 ? 'fast' : delta < -5 ? 'slow' : 'even', elapsed }
+}
+
+export type Effect = { icon: string; label: string; color: string }
+
+export const effectsOf = (o: { errStreak: number; slowUntil: number; burning: boolean; limits: Limit[]; now: number }): Effect[] => {
+  const out: Effect[] = []
+  if (o.errStreak >= POISON_STREAK) out.push({ icon: '☠', label: 'POISONED', color: 'error' })
+  if (o.slowUntil > o.now) out.push({ icon: '◔', label: 'SLOWED', color: 'warning' })
+  if (o.burning) out.push({ icon: '✹', label: 'BURNING', color: 'warning' })
+  if (o.limits.some(l => l.pct >= 90 && !(l.resetsAt && Date.parse(l.resetsAt) <= o.now))) out.push({ icon: '❄', label: 'FROZEN', color: 'suggestion' })
+  return out
+}
+
+// Dollars per minute over the recent samples; undefined until they span half a minute.
+export const burnRate = (samples: CostSample[]) => {
+  const first = samples[0]
+  const last = samples[samples.length - 1]
+  if (!first || !last || last.t - first.t < 30_000) return undefined
+  return (last.usd - first.usd) / ((last.t - first.t) / 60_000)
+}
+
+// Burning only while the spend is recent: an idle session cools off.
+export const isBurning = (samples: CostSample[], now: number) => {
+  const last = samples[samples.length - 1]
+  if (!last || now - last.t > BURN_STALE_MS) return false
+  const rate = burnRate(samples)
+  return rate !== undefined && rate >= BURN_USD_PER_MIN
+}
+
+const addSample = (samples: CostSample[], t: number, usd: number) =>
+  [...samples, { t, usd }].filter(c => t - c.t <= BURN_WINDOW_MS)
 
 let lastParty = ''
 let warnedHp = false
@@ -94,9 +148,7 @@ async function refreshParty($: EngineInterface) {
     lastParty = key
     await update($, party, () => active)
   }
-  if (active.length > 0) {
-    await update($, frame, f => (f + 1) % 2)
-  }
+  await update($, frame, f => (f + 1) % 2)
   const roster: Member[] = all.map(a => ({ id: a.id, type: a.type, description: a.description, status: a.status }))
   const rosterKey = JSON.stringify(roster)
   if (rosterKey !== lastRoster) {
@@ -129,6 +181,9 @@ export const register: Register = on => {
     const ran = await next(e)
     const usage = await $.session.usage()
     await update($, stats, () => toStats(usage))
+    await update($, errStreak, () => 0)
+    await update($, slowUntil, () => 0)
+    await update($, costSamples, () => [])
     await refreshParty($)
     $.clock.every(1000, () => void refreshParty($))
     await $.command.register({ name: 'raid', description: 'Open the Raid Frames pane: live tool calls of every agent' })
@@ -140,6 +195,11 @@ export const register: Register = on => {
     const s = toStats(e)
     await update($, stats, () => s)
     alarms($, s)
+    if (s.usd !== undefined) {
+      const usd = s.usd
+      const t = await $.clock.now()
+      await update($, costSamples, c => addSample(c, t, usd))
+    }
 
     return next(e)
   })
@@ -155,17 +215,35 @@ export const register: Register = on => {
   on('tool.call', async ($, e, next) => {
     await update($, xp, n => n + 1)
     const agentId = e.agentId
-    if (!agentId) {
-      return next(e)
+    const call: Call = { id: e.tool_use_id, tool: e.tool, target: targetOf(e as Record<string, unknown>), state: 'run' }
+    if (agentId) {
+      await update($, raid, frames => recordCall(frames, agentId, call))
+    }
+    const started = await $.clock.now()
+    let ran: Awaited<ReturnType<typeof next>> | undefined
+    try {
+      ran = await next(e)
+    } finally {
+      // A call that threw or was aborted still counts as a failure.
+      const errored = ran === undefined || ran.isError === true
+      const failed = errored || ran?.deny !== undefined
+      if (agentId) {
+        await update($, raid, frames => recordCall(frames, agentId, { ...call, state: failed ? 'err' : 'ok' }))
+      } else {
+        // The main agent's own calls drive its status effects; a refusal is not a broken tool.
+        await update($, errStreak, n => (errored ? n + 1 : ran?.deny !== undefined ? n : 0))
+        const t = await $.clock.now()
+        if (t - started >= SLOW_CALL_MS && !NO_SLOW_TOOLS.includes(e.tool)) {
+          await update($, slowUntil, () => t + SLOW_SHOW_MS)
+        }
+        const usd = (await $.session.usage()).cost?.usd
+        if (usd !== undefined) {
+          await update($, costSamples, c => addSample(c, t, usd))
+        }
+      }
     }
 
-    const call: Call = { id: e.tool_use_id, tool: e.tool, target: targetOf(e as Record<string, unknown>), state: 'run' }
-    await update($, raid, frames => recordCall(frames, agentId, call))
-    const ran = await next(e)
-    const failed = ran.isError === true || ran.deny !== undefined
-    await update($, raid, frames => recordCall(frames, agentId, { ...call, state: failed ? 'err' : 'ok' }))
-
-    return ran
+    return ran!
   })
 
   on('command.run', { command: 'raid' }, async $ => {
@@ -232,6 +310,10 @@ export const register: Register = on => {
     const points = await read($, xp)
     const f = await read($, frame)
     const now = await $.clock.now()
+    const streak = await read($, errStreak)
+    const slow = await read($, slowUntil)
+    const samples = await read($, costSamples)
+    const effects = effectsOf({ errStreak: streak, slowUntil: slow, burning: isBurning(samples, now), limits: s?.limits ?? [], now })
 
     const level = levelOf(points)
     const lo = floorOf(level)
@@ -256,7 +338,10 @@ export const register: Register = on => {
 
     const partyText =
       members.length === 0 ? (
-        <Text dimColor>resting at camp</Text>
+        <Text>
+          <Text dimColor>resting at camp </Text>
+          <Text color={f === 0 ? 'warning' : 'error'}>♨</Text>
+        </Text>
       ) : (
         <Text>
           {members.slice(0, 4).map((m, i) => (
@@ -320,6 +405,13 @@ export const register: Register = on => {
             ♥ HP{'  '}
           </Text>
           {hpText}
+          {effects.map(x => (
+            <Text color={x.color}>
+              {'  '}
+              {x.icon}
+              {cols >= 100 ? ` ${x.label}` : ''}
+            </Text>
+          ))}
         </Text>
         <Text wrap="truncate">
           <Text color="warning" bold>
@@ -328,15 +420,24 @@ export const register: Register = on => {
           {!s || s.limits.length === 0 ? (
             <Text dimColor>no rate-limit readings yet</Text>
           ) : (
-            s.limits.map(l => (
-              <Text>
-                <Text dimColor>{LIMIT_NAMES[l.kind] ?? l.kind} </Text>
-                <Text color={tone(100 - l.pct)}>{bar(100 - l.pct, Math.max(4, Math.floor(w / 2)))}</Text>{' '}
-                {100 - l.pct}%
-                <Text dimColor> ↻ {countdown(l.resetsAt, now)}</Text>
-                {'   '}
-              </Text>
-            ))
+            s.limits.map(l => {
+              const pace = paceOf(l, now)
+              return (
+                <Text>
+                  <Text dimColor>{LIMIT_NAMES[l.kind] ?? l.kind} </Text>
+                  <Text color={tone(100 - l.pct)}>{bar(100 - l.pct, Math.max(4, Math.floor(w / 2)))}</Text>{' '}
+                  {100 - l.pct}%
+                  {pace && (
+                    <Text color={pace.kind === 'fast' ? 'error' : pace.kind === 'slow' ? 'success' : undefined} dimColor={pace.kind === 'even'}>
+                      {' '}
+                      {pace.kind === 'fast' ? '▲' : pace.kind === 'slow' ? '▼' : '≈'}
+                    </Text>
+                  )}
+                  <Text dimColor> ↻ {countdown(l.resetsAt, now)}</Text>
+                  {'   '}
+                </Text>
+              )
+            })
           )}
         </Text>
         <Text wrap="truncate">

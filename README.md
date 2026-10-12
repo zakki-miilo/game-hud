@@ -12,10 +12,11 @@ A video-game HUD for Claude Code, drawn above the prompt:
 ```
 
 - **♥ HP**: free context window. Toast at 75% used.
-- **◆ SP**: rate-limit windows left (subscription plans), with reset countdowns. Toast at 90% used.
+- **◆ SP**: rate-limit windows left (subscription plans), with reset countdowns. Toast at 90% used. A pace marker compares what you've used with how much of the window has passed: `▲` burning faster than the clock, `▼` ahead of it, `≈` on pace.
+- **Status effects**, after the HP bar: `☠ POISONED` (3 failed tool calls in a row), `◔ SLOWED` (a tool call took over 20s), `✹ BURNING` (spending over $0.50/min), `❄ FROZEN` (a limit is 90% used).
 - **◎**: session cost so far.
 - **★ LV / XP**: one XP per tool call, main agent and subagents.
-- **⚑ PARTY**: subagents currently running, starting or waiting.
+- **⚑ PARTY**: subagents currently running, starting or waiting. With none, the party rests at a flickering campfire (♨).
 
 ## Raid Frames
 

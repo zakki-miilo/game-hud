@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { bar, levelOf, mergeRoster, recordCall, targetOf } from './register'
+import { bar, burnRate, effectsOf, isBurning, levelOf, mergeRoster, paceOf, recordCall, targetOf } from './register'
 
 const band = (maxRows: number) => ({
   component: 'AbovePrompt' as const,
@@ -81,4 +81,48 @@ test('raid pane shows an empty camp before any agent', async ($, on) => {
   })
   expect(await ui.find({ type: 'Text', text: /No party yet/ })).toBeDefined()
   await ui.unmount()
+})
+
+test('pace compares stamina used with the clock', async () => {
+  const now = Date.parse('2026-10-12T00:00:00Z')
+  const resetsAt = new Date(now + 2.5 * 3600_000).toISOString() // half of the 5h window gone
+  expect(paceOf({ kind: 'five_hour', pct: 80, resetsAt }, now)?.kind).toBe('fast')
+  expect(paceOf({ kind: 'five_hour', pct: 20, resetsAt }, now)?.kind).toBe('slow')
+  expect(paceOf({ kind: 'five_hour', pct: 52, resetsAt }, now)?.kind).toBe('even')
+  expect(paceOf({ kind: 'spend_limit', pct: 80, resetsAt }, now)).toBeUndefined()
+  expect(paceOf({ kind: 'five_hour', pct: 80 }, now)).toBeUndefined()
+})
+
+test('status effects follow errors, slow calls, spend and stamina', async () => {
+  const base = { errStreak: 0, slowUntil: 0, burning: false, limits: [], now: 1000 }
+  expect(effectsOf(base)).toEqual([])
+  const labels = (o: Partial<typeof base>) => effectsOf({ ...base, ...o }).map(e => e.label)
+  expect(labels({ errStreak: 2 })).toEqual([])
+  expect(labels({ errStreak: 3 })).toEqual(['POISONED'])
+  expect(labels({ slowUntil: 2000 })).toEqual(['SLOWED'])
+  expect(labels({ slowUntil: 500 })).toEqual([])
+  expect(labels({ burning: true })).toEqual(['BURNING'])
+  expect(labels({ limits: [{ kind: 'five_hour', pct: 91 }] })).toEqual(['FROZEN'])
+})
+
+test('burn rate needs half a minute of samples', async () => {
+  expect(burnRate([{ t: 0, usd: 0 }])).toBeUndefined()
+  expect(burnRate([{ t: 0, usd: 0 }, { t: 10_000, usd: 1 }])).toBeUndefined()
+  expect(burnRate([{ t: 0, usd: 0 }, { t: 60_000, usd: 0.75 }])).toBe(0.75)
+})
+
+test('burning cools off when the session goes idle', async () => {
+  const hot = [{ t: 0, usd: 0 }, { t: 60_000, usd: 1 }]
+  expect(isBurning(hot, 60_000)).toBe(true)
+  expect(isBurning(hot, 200_000)).toBe(false)
+  expect(isBurning([{ t: 0, usd: 0 }, { t: 60_000, usd: 0.1 }], 60_000)).toBe(false)
+  expect(isBurning([], 0)).toBe(false)
+})
+
+test('a window that has reset is stale: no pace marker, no frozen', async () => {
+  const now = Date.parse('2026-10-12T00:00:00Z')
+  const past = new Date(now - 1000).toISOString()
+  expect(paceOf({ kind: 'five_hour', pct: 92, resetsAt: past }, now)).toBeUndefined()
+  const base = { errStreak: 0, slowUntil: 0, burning: false, now }
+  expect(effectsOf({ ...base, limits: [{ kind: 'five_hour', pct: 92, resetsAt: past }] })).toEqual([])
 })
