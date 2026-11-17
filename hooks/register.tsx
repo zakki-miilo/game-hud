@@ -54,16 +54,17 @@ export const bar = (pct: number, width: number) => {
   return '█'.repeat(filled) + '░'.repeat(width - filled)
 }
 
-// Explicit colors instead of theme keys, so the HUD can wear the opposite of the screen around it.
+// Explicit colors instead of theme keys, so the panel reads as one card whatever the terminal theme is.
+// `track` is the faint empty part of a bar; `edge` the border.
 export const PALETTES = {
-  dark: { bg: '#1e1f29', text: '#e6e6e6', dim: '#8a8fa3', claude: '#e08a6a', success: '#7bc96f', warning: '#e5c07b', error: '#ef6b73', suggestion: '#8fa8ff' },
-  light: { bg: '#f4f1ea', text: '#1f1f24', dim: '#6b6f7b', claude: '#b5532f', success: '#2e7d32', warning: '#9a6200', error: '#c62828', suggestion: '#3f51b5' },
+  dark: { bg: '#262836', text: '#e8e9f0', dim: '#8b90a8', track: '#41445a', edge: '#e08a6a', claude: '#f0a083', success: '#8fd47f', warning: '#f0cc82', error: '#f2777f', suggestion: '#9db4ff' },
+  light: { bg: '#f4f1ea', text: '#1f1f24', dim: '#6b6f7b', track: '#d8d3c6', edge: '#b5532f', claude: '#b5532f', success: '#2e7d32', warning: '#9a6200', error: '#c62828', suggestion: '#3f51b5' },
 } as const
 
 export type Palette = (typeof PALETTES)[Look]
 
-// The HUD wears the opposite of the system appearance: dark on a light system, light on a dark one.
-export const lookFor = (system: Look): Look => (system === 'dark' ? 'light' : 'dark')
+// The HUD follows the system appearance: dark card on a dark system, light card on a light one.
+export const lookFor = (system: Look): Look => system
 
 // macOS appearance; elsewhere, Claude Code's own theme setting.
 async function systemAppearance($: EngineInterface): Promise<Look> {
@@ -86,6 +87,17 @@ async function refreshLook($: EngineInterface) {
   } catch (err) {
     $.ui.log(`game-hud: appearance check failed: ${String(err)}`, { to: 'debug' })
   }
+}
+
+// A bar whose empty part is a faint track instead of loud dither.
+const meter = (p: Palette, pct: number, width: number, color: string) => {
+  const full = bar(pct, width).replace(/░/g, '').length
+  return (
+    <Text>
+      <Text color={color}>{'█'.repeat(full)}</Text>
+      <Text color={p.track}>{'░'.repeat(width - full)}</Text>
+    </Text>
+  )
 }
 
 const tone = (remaining: number) => (remaining > 50 ? 'success' : remaining > 20 ? 'warning' : 'error')
@@ -396,7 +408,7 @@ export const register: Register = on => {
         <Text color={p.dim}>{'?'.repeat(w)} awaiting first battle</Text>
       ) : (
         <Text>
-          <Text color={paint(tone(hp))}>{bar(hp, w)}</Text> {hp}%{' '}
+          {meter(p, hp, w, paint(tone(hp)))} {hp}%{' '}
           <Text color={p.dim}>
             {kilo(s!.ctxTokens ?? 0)}/{kilo(s!.ctxWindow)} used
           </Text>
@@ -407,7 +419,7 @@ export const register: Register = on => {
       members.length === 0 ? (
         <Text>
           <Text color={p.dim}>resting at camp </Text>
-          <Text color={f === 0 ? 'warning' : 'error'}>♨</Text>
+          <Text color={f === 0 ? p.warning : p.error}>♨</Text>
         </Text>
       ) : (
         <Text>
@@ -450,7 +462,7 @@ export const register: Register = on => {
     }
 
     return (
-      <Box flexDirection="column" borderStyle="round" borderColor={p.claude} backgroundColor={p.bg} paddingX={1}>
+      <Box flexDirection="column" borderStyle="round" borderColor={p.edge} backgroundColor={p.bg} paddingX={1}>
         <Box justifyContent="space-between">
           <Text wrap="truncate" color={p.text}>
             <Text color={p.claude} bold>
@@ -458,7 +470,7 @@ export const register: Register = on => {
             </Text>
             {'  '}
             <Text bold>★ LV {level}</Text>{' '}
-            <Text color={p.suggestion}>{bar(((points - lo) / (hi - lo)) * 100, w)}</Text>{' '}
+            {meter(p, ((points - lo) / (hi - lo)) * 100, w, p.suggestion)}{' '}
             <Text color={p.dim}>
               {points - lo}/{hi - lo} XP
             </Text>
@@ -492,7 +504,7 @@ export const register: Register = on => {
               return (
                 <Text>
                   <Text color={p.dim}>{LIMIT_NAMES[l.kind] ?? l.kind} </Text>
-                  <Text color={paint(tone(100 - l.pct))}>{bar(100 - l.pct, Math.max(4, Math.floor(w / 2)))}</Text>{' '}
+                  {meter(p, 100 - l.pct, Math.max(4, Math.floor(w / 2)), paint(tone(100 - l.pct)))}{' '}
                   {100 - l.pct}%
                   {pace && (
                     <Text color={pace.kind === 'fast' ? p.error : pace.kind === 'slow' ? p.success : p.dim}>

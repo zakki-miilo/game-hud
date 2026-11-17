@@ -43,9 +43,9 @@ test('HUD shows HP, stamina, gold, level and an empty party', async ($, on) => {
   }
 })
 
-test('the HUD wears the opposite of the system appearance', async () => {
-  expect(lookFor('light')).toBe('dark')
-  expect(lookFor('dark')).toBe('light')
+test('the HUD follows the system appearance', async () => {
+  expect(lookFor('light')).toBe('light')
+  expect(lookFor('dark')).toBe('dark')
 })
 
 test('the HUD paints its own background and text', async ($, on) => {
