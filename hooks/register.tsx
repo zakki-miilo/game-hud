@@ -5,13 +5,13 @@ import type { Call, CostSample, Frame, Limit, Look, Member, Stats } from '../typ
 
 const stats = atom({ plugin: 'game-hud', key: 'stats' } as const, null)
 const party = atom({ plugin: 'game-hud', key: 'party' } as const, [])
-const xp = atom({ plugin: 'game-hud', key: 'xp' } as const, 0)
 const frame = atom({ plugin: 'game-hud', key: 'frame' } as const, 0)
 const raid = atom({ plugin: 'game-hud', key: 'raid' } as const, [])
 const errStreak = atom({ plugin: 'game-hud', key: 'errStreak' } as const, 0)
 const errAt = atom({ plugin: 'game-hud', key: 'errAt' } as const, 0)
 const slowUntil = atom({ plugin: 'game-hud', key: 'slowUntil' } as const, 0)
 const costSamples = atom({ plugin: 'game-hud', key: 'costSamples' } as const, [])
+const model = atom({ plugin: 'game-hud', key: 'model' } as const, '')
 const look = atom({ plugin: 'game-hud', key: 'look' } as const, 'dark')
 
 const RAID = 'raid-frames'
@@ -28,6 +28,7 @@ const BURN_USD_PER_MIN = 0.5
 const BURN_WINDOW_MS = 3 * 60_000
 const BURN_STALE_MS = 60_000
 const LOOK_CHECK_MS = 10_000
+const MODEL_CHECK_MS = 2_000
 // Tools that wait on the user or on other agents, not on themselves.
 const NO_SLOW_TOOLS = ['Agent', 'Task', 'Workflow', 'AskUserQuestion', 'ExitPlanMode', 'EnterPlanMode']
 const SPRITES = [
@@ -45,10 +46,6 @@ export const toStats = (u: Pick<SessionUsage, 'context' | 'rateLimits' | 'cost'>
   usd: u.cost?.usd,
 })
 
-// XP needed to reach a level: 10, 40, 90, 160, ...
-export const levelOf = (points: number) => Math.floor(Math.sqrt(points / 10)) + 1
-const floorOf = (level: number) => 10 * (level - 1) ** 2
-
 export const bar = (pct: number, width: number) => {
   const filled = Math.round((Math.max(0, Math.min(100, pct)) / 100) * width)
   return '█'.repeat(filled) + '░'.repeat(width - filled)
@@ -65,6 +62,26 @@ export type Palette = (typeof PALETTES)[Look]
 
 // The HUD follows the system appearance: dark card on a dark system, light card on a light one.
 export const lookFor = (system: Look): Look => system
+
+// 'claude-opus-5-5' -> 'Opus 5.5'; anything unrecognised is shown as given.
+export const modelName = (id: unknown): string => {
+  const raw = typeof id === 'string' ? id : typeof id === 'object' && id !== null ? String((id as { id?: unknown; name?: unknown }).id ?? (id as { name?: unknown }).name ?? '') : ''
+  const m = /(opus|sonnet|haiku|fable)[-\s]?(\d+)?(?:[-.](\d+))?/i.exec(raw)
+  if (!m) return raw.replace(/^claude-/, '')
+  const family = m[1]!.charAt(0).toUpperCase() + m[1]!.slice(1).toLowerCase()
+  return [family, m[2] && m[3] ? `${m[2]}.${m[3]}` : m[2]].filter(Boolean).join(' ')
+}
+
+async function refreshModel($: EngineInterface) {
+  try {
+    const next = modelName(await $.session.model())
+    if (next !== (await read($, model))) {
+      await update($, model, () => next)
+    }
+  } catch (err) {
+    $.ui.log(`game-hud: model check failed: ${String(err)}`, { to: 'debug' })
+  }
+}
 
 // macOS appearance; elsewhere, Claude Code's own theme setting.
 async function systemAppearance($: EngineInterface): Promise<Look> {
@@ -253,6 +270,8 @@ export const register: Register = on => {
     await refreshParty($)
     $.clock.every(1000, () => void refreshParty($))
     await refreshLook($)
+    await refreshModel($)
+    $.clock.every(MODEL_CHECK_MS, () => void refreshModel($))
     $.clock.every(LOOK_CHECK_MS, () => void refreshLook($))
     await $.command.register({ name: 'raid', description: 'Open the Raid Frames pane: live tool calls of every agent' })
 
@@ -281,7 +300,6 @@ export const register: Register = on => {
   })
 
   on('tool.call', async ($, e, next) => {
-    await update($, xp, n => n + 1)
     const agentId = e.agentId
     const call: Call = { id: e.tool_use_id, tool: e.tool, target: targetOf(e as Record<string, unknown>), state: 'run' }
     if (agentId) {
@@ -385,7 +403,6 @@ export const register: Register = on => {
     const paint = (key: string) => p[key as keyof Palette] ?? key
     const s = await read($, stats)
     const members = await read($, party)
-    const points = await read($, xp)
     const f = await read($, frame)
     const now = await $.clock.now()
     const streak = await read($, errStreak)
@@ -394,9 +411,7 @@ export const register: Register = on => {
     const samples = await read($, costSamples)
     const effects = effectsOf({ errStreak: streak, errAt: errTime, slowUntil: slow, burning: isBurning(samples, now), limits: s?.limits ?? [], now })
 
-    const level = levelOf(points)
-    const lo = floorOf(level)
-    const hi = floorOf(level + 1)
+    const modelLabel = (await read($, model)) || 'model ?'
     const cols = e.props.bodyColumns
     const w = Math.max(6, Math.min(20, Math.floor((cols - 44) / 3)))
 
@@ -445,7 +460,7 @@ export const register: Register = on => {
       return (
         <Text wrap="truncate" color={p.text} backgroundColor={p.bg}>
           <Text color={p.claude} bold>
-            LV{level}
+            {modelLabel}
           </Text>{' '}
           <Text color={p.error}>♥</Text>
           {hp ?? '?'}%{' '}
@@ -469,10 +484,8 @@ export const register: Register = on => {
               ⚔ CLAUDE QUEST
             </Text>
             {'  '}
-            <Text bold>★ LV {level}</Text>{' '}
-            {meter(p, ((points - lo) / (hi - lo)) * 100, w, p.suggestion)}{' '}
-            <Text color={p.dim}>
-              {points - lo}/{hi - lo} XP
+            <Text color={p.suggestion} bold>
+              ◈ {modelLabel}
             </Text>
           </Text>
           <Text color={p.warning} bold>

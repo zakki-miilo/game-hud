@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { PALETTES, bar, burnRate, effectsOf, isBurning, levelOf, lookFor, mergeRoster, nextStreak, outcomeOf, paceOf, recordCall, targetOf } from './register'
+import { PALETTES, modelName, bar, burnRate, effectsOf, isBurning, lookFor, mergeRoster, nextStreak, outcomeOf, paceOf, recordCall, targetOf } from './register'
 
 const band = (maxRows: number) => ({
   component: 'AbovePrompt' as const,
@@ -15,15 +15,16 @@ const world = (on: On) => {
   on('session.measure', ($, e) => ({ changed: e.changed }))
 }
 
-test('bars and levels', async () => {
+test('bars and model names', async () => {
+  expect(modelName('claude-opus-5-5')).toBe('Opus 5.5')
+  expect(modelName('claude-sonnet-5-5[1m]')).toBe('Sonnet 5.5')
+  expect(modelName('claude-opus-4-1-20250805')).toBe('Opus 4.1')
+  expect(modelName('')).toBe('')
   expect(bar(50, 10)).toBe('█████░░░░░')
   expect(bar(150, 4)).toBe('████')
-  expect(levelOf(0)).toBe(1)
-  expect(levelOf(10)).toBe(2)
-  expect(levelOf(39)).toBe(2)
 })
 
-test('HUD shows HP, stamina, gold, level and an empty party', async ($, on) => {
+test('HUD shows HP, stamina, gold, model and an empty party', async ($, on) => {
   world(on)
   await $.session.measure({
     context: { tokens: 60000, window: 200000, percent: 30 },
@@ -34,7 +35,7 @@ test('HUD shows HP, stamina, gold, level and an empty party', async ($, on) => {
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'game-hud', surface, ...band(10) })
-    expect(await ui.find({ type: 'Text', text: /LV 1/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /CLAUDE QUEST|model/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /70%/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /\$1\.50/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /5H/ })).toBeDefined()
@@ -60,7 +61,7 @@ test('cramped band falls back to one line', async ($, on) => {
   world(on)
   const ui = await $.ui.mount({ plugin: 'game-hud', surface: 'terminal', ...band(3) })
   expect(await ui.find({ type: 'Box' })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: /LV1/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /CLAUDE QUEST|model/ })).toBeDefined()
   await ui.unmount()
 })
 

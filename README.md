@@ -4,7 +4,7 @@ A video-game HUD for Claude Code, drawn above the prompt:
 
 ```
 ╭──────────────────────────────────────────────────────────────╮
-│ ⚔ CLAUDE QUEST  ★ LV 3 ▓▓▓▓░░░░░░  18/50 XP        ◎ $1.42   │
+│ ⚔ CLAUDE QUEST  ◈ Opus 5.5                      ◎ $1.42   │
 │ ♥ HP  ████████░░░░ 68%  64k/200k used                        │
 │ ◆ SP  5H ████░░ 77% ↻ 2h14m   7D ███░░░ 59% ↻ 3d4h           │
 │ ⚑ PARTY [2] ♞ Explore find auth code   ♜ critic review diff │
@@ -15,7 +15,7 @@ A video-game HUD for Claude Code, drawn above the prompt:
 - **◆ SP**: rate-limit windows left (subscription plans), with reset countdowns. Toast at 90% used. A pace marker compares what you've used with how much of the window has passed: `▲` burning faster than the clock, `▼` ahead of it, `≈` on pace.
 - **Status effects**, after the HP bar: `☠ POISONED` (3 failed tool calls in a row, fading after 5 quiet minutes; a refused permission prompt looks like a failure to the plugin API, so it counts too), `◔ SLOWED` (a tool call took over 20s), `✹ BURNING` (spending over $0.50/min), `❄ FROZEN` (a limit is 90% used).
 - **◎**: session cost so far.
-- **★ LV / XP**: one XP per tool call, main agent and subagents.
+- **◈ Model**: the model in use right now (it updates when it switches, e.g. under Opus Plan).
 - **⚑ PARTY**: subagents currently running, starting or waiting. With none, the party rests at a flickering campfire (♨).
 - **Colors**: the HUD and Raid Frames paint their own card to match your system appearance: dark in dark mode, light in light mode, rechecked every 10 seconds. Off macOS it goes by Claude Code's `/config` theme instead.
 

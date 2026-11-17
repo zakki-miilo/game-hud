@@ -1,6 +1,6 @@
 {
   "name": "game-hud",
-  "version": "0.3.1",
-  "description": "Video-game HUD above the prompt: context HP, rate-limit stamina, gold spent, XP level and your active agent party",
+  "version": "0.3.2",
+  "description": "Video-game HUD above the prompt: context HP, rate-limit stamina, gold spent, active model and your agent party",
   "types": "./types/index.d.ts"
 }
