@@ -5,13 +5,12 @@ import { PALETTES, modelName, bar, burnRate, effectsOf, isBurning, lookFor, merg
 
 const band = (maxRows: number) => ({
   component: 'AbovePrompt' as const,
-  props: { hasSurvey: false, isWorking: false, maxRows, bodyColumns: 100, scroll: { offset: 0, bodyRows: maxRows }, view: {} },
+  props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows, bodyColumns: 100, scroll: { offset: 0, bodyRows: maxRows }, view: {} },
 })
 
 // Stand in for the engine beneath the mod: a clock, an empty band, a measurement echo.
 const world = (on: On) => {
   mock.clock(on)
-  on('ui.render', () => undefined as never)
   on('session.measure', ($, e) => ({ changed: e.changed }))
 }
 

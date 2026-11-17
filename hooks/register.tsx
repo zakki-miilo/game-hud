@@ -107,7 +107,7 @@ async function refreshLook($: EngineInterface) {
 }
 
 // A bar whose empty part is a faint track instead of loud dither.
-const meter = (p: Palette, pct: number, width: number, color: string) => {
+const meter = (Text: any, p: Palette, pct: number, width: number, color: string) => {
   const full = bar(pct, width).replace(/░/g, '').length
   return (
     <Text>
@@ -423,7 +423,7 @@ export const register: Register = on => {
         <Text color={p.dim}>{'?'.repeat(w)} awaiting first battle</Text>
       ) : (
         <Text>
-          {meter(p, hp, w, paint(tone(hp)))} {hp}%{' '}
+          {meter(Text, p, hp, w, paint(tone(hp)))} {hp}%{' '}
           <Text color={p.dim}>
             {kilo(s!.ctxTokens ?? 0)}/{kilo(s!.ctxWindow)} used
           </Text>
@@ -517,7 +517,7 @@ export const register: Register = on => {
               return (
                 <Text>
                   <Text color={p.dim}>{LIMIT_NAMES[l.kind] ?? l.kind} </Text>
-                  {meter(p, 100 - l.pct, Math.max(4, Math.floor(w / 2)), paint(tone(100 - l.pct)))}{' '}
+                  {meter(Text, p, 100 - l.pct, Math.max(4, Math.floor(w / 2)), paint(tone(100 - l.pct)))}{' '}
                   {100 - l.pct}%
                   {pace && (
                     <Text color={pace.kind === 'fast' ? p.error : pace.kind === 'slow' ? p.success : p.dim}>
