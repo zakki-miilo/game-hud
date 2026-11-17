@@ -23,7 +23,7 @@ declare module 'claude-code' {
     'game-hud': {
       stats: Stats | null
       party: Member[]
-      xp: number
+      model: string
       frame: number
       raid: Frame[]
       errStreak: number
